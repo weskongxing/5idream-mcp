@@ -38,9 +38,9 @@ UA = (
 )
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SESSION_FILE = os.path.join(HERE, "session.json")
-PENDING_LOGIN_FILE = os.path.join(HERE, "pending_login.json")
-QR_IMAGE_FILE = os.path.join(HERE, "login_qrcode.png")
+SESSION_FILE = os.environ.get("DM_SESSION_FILE") or os.path.join(HERE, "session.json")
+PENDING_LOGIN_FILE = os.environ.get("DM_PENDING_LOGIN_FILE") or os.path.join(HERE, "pending_login.json")
+QR_IMAGE_FILE = os.environ.get("DM_QR_OUTPUT_PATH") or os.path.join(HERE, "login_qrcode.png")
 
 STATUS_MAP = {
     "1": "审核流程中",

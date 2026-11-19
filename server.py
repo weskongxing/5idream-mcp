@@ -15,9 +15,12 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
+import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -724,7 +727,7 @@ def handle_rpc(req: Dict[str, Any]) -> Dict[str, Any] | None:
     return None
 
 
-def main() -> None:
+def run_stdio() -> None:
     if hasattr(sys.stdin, "reconfigure"):
         sys.stdin.reconfigure(encoding="utf-8")
     if hasattr(sys.stdout, "reconfigure"):
@@ -746,6 +749,91 @@ def main() -> None:
         if resp is not None:
             sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")
             sys.stdout.flush()
+
+
+class _McpHttpHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, fmt: str, *args: Any) -> None:
+        sys.stderr.write("[5idream-mcp] " + (fmt % args) + "\n")
+
+    def _send_bytes(self, code: int, body: bytes, content_type: str = "application/json; charset=utf-8", extra_headers: Dict[str, str] | None = None) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, v)
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
+
+    def do_GET(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if path == "/health":
+            self._send_bytes(200, b'{"status":"ok","server":"5idream-mcp"}')
+            return
+        # Streamable HTTP: 405 indicates no standalone server-initiated SSE stream needed
+        self._send_bytes(405, b'{"error":"Method Not Allowed"}', extra_headers={"Allow": "POST, DELETE"})
+
+    def do_DELETE(self) -> None:
+        self._send_bytes(200, b"{}")
+
+    def do_POST(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if path not in ("/mcp", "/mcp/", "/"):
+            self._send_bytes(404, b'{"error":"Not Found"}')
+            return
+
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length > 0 else b""
+        session_id = self.headers.get("Mcp-Session-Id") or uuid.uuid4().hex
+        headers = {"Mcp-Session-Id": session_id}
+
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except Exception as e:
+            err = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": f"Parse error: {e}"}}
+            self._send_bytes(400, json.dumps(err, ensure_ascii=False).encode("utf-8"), extra_headers=headers)
+            return
+
+        if isinstance(payload, list):
+            responses = []
+            for item in payload:
+                r = handle_rpc(item)
+                if r is not None:
+                    responses.append(r)
+            if not responses:
+                self._send_bytes(202, b"", content_type="text/plain; charset=utf-8", extra_headers=headers)
+            else:
+                self._send_bytes(200, json.dumps(responses, ensure_ascii=False).encode("utf-8"), extra_headers=headers)
+            return
+
+        resp = handle_rpc(payload)
+        if resp is None:
+            self._send_bytes(202, b"", content_type="text/plain; charset=utf-8", extra_headers=headers)
+        else:
+            self._send_bytes(200, json.dumps(resp, ensure_ascii=False).encode("utf-8"), extra_headers=headers)
+
+
+def run_http(host: str, port: int) -> None:
+    srv = ThreadingHTTPServer((host, port), _McpHttpHandler)
+    sys.stderr.write(f"[5idream-mcp] Streamable HTTP listening on http://{host}:{port}/mcp\n")
+    sys.stderr.flush()
+    srv.serve_forever()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="5idream MCP Server (stdio or streamable-http)")
+    parser.add_argument("--http", action="store_true", help="Run as Streamable HTTP MCP server")
+    parser.add_argument("--host", default=os.environ.get("MCP_HOST", "127.0.0.1"), help="HTTP bind host")
+    parser.add_argument("--port", type=int, default=int(os.environ.get("MCP_PORT", "18434")), help="HTTP bind port")
+    args = parser.parse_args()
+
+    if args.http:
+        run_http(args.host, args.port)
+    else:
+        run_stdio()
 
 
 if __name__ == "__main__":
