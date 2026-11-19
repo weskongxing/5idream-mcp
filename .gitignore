@@ -1,0 +1,22 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Auth, session & runtime cache (sensitive)
+session.json
+pending_login.json
+cookies.json
+*.token
+
+# Generated QR code images
+login_qrcode*.png
+*.png
+
+# Local env & IDE
+.env
+.venv/
+venv/
+.idea/
+.vscode/
+.DS_Store
